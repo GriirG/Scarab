@@ -1,8 +1,13 @@
+// ═══════════════════════════════════════════════════════════════════
+// БД: Firebase compat + localStorage
+// Compat-версия подключается через <script> в index.html,
+// поэтому CORS-проблем с GitHub Pages не возникает.
+// ═══════════════════════════════════════════════════════════════════
 function saveState() {
   if (!state) return Promise.resolve();
   var clean = JSON.parse(JSON.stringify(state));
-  if (db.mode === 'firebase' && db.set && db.ref && db.database) {
-    return db.set(db.ref(db.database, 'state'), clean).catch(function(e) {
+  if (db.mode === 'firebase' && db.database) {
+    return db.database.ref('state').set(clean).catch(function(e) {
       console.error('save failed', e);
       try { localStorage.setItem(LS_KEY_DB, JSON.stringify(clean)); } catch(_) {}
     });
@@ -23,28 +28,32 @@ function fallbackLocal() {
   render();
 }
 
-async function initDB() {
+function initDB() {
   if (!isFirebaseConfigured()) { fallbackLocal(); return; }
+
+  if (typeof firebase === 'undefined' || !firebase.initializeApp) {
+    console.error('Firebase compat SDK не загрузился. Проверь теги <script> в index.html.');
+    db.error = 'Firebase SDK не загрузился';
+    db.mode = 'error';
+    fallbackLocal();
+    return;
+  }
+
   try {
-    var appMod  = await import(FB_CDN + '/firebase-app.js');
-    var dbMod   = await import(FB_CDN + '/firebase-database.js');
-    var authMod = await import(FB_CDN + '/firebase-auth.js');
+    firebase.initializeApp(FIREBASE_CONFIG);
+    var database = firebase.database();
 
-    var app      = appMod.initializeApp(FIREBASE_CONFIG);
-    var database = dbMod.getDatabase(app);
-    var auth     = authMod.getAuth(app);
-
-    try { await authMod.signInAnonymously(auth); }
-    catch (e) { console.warn('Anonymous auth failed:', e.message); }
+    // Пробуем анонимный вход (не критично, если уже включён)
+    try {
+      firebase.auth().signInAnonymously().catch(function(e) {
+        console.warn('Anonymous auth failed:', e.message);
+      });
+    } catch (e) { console.warn('Auth init failed:', e.message); }
 
     db.database = database;
-    db.ref = dbMod.ref;
-    db.set = dbMod.set;
     db.mode = 'firebase';
 
-    var stateRef = dbMod.ref(database, 'state');
-    dbMod.onValue(
-      stateRef,
+    database.ref('state').on('value',
       function(snap) {
         var val = snap.val();
         if (val && typeof val === 'object') {
@@ -52,7 +61,7 @@ async function initDB() {
           render();
         } else {
           var def = JSON.parse(JSON.stringify(DEFAULT_STATE));
-          dbMod.set(stateRef, def).catch(function(e) { console.error('init set failed', e); });
+          database.ref('state').set(def).catch(function(e) { console.error('init set failed', e); });
           state = def;
           render();
         }
