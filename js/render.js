@@ -105,10 +105,11 @@ function renderConfirmModal() {
 
 function renderBase() {
   var resHtml = state.resources.length ? state.resources.map(function(r) {
-    var pct = r.max > 0 ? clamp((r.current / r.max) * 100, 0, 100) : 0;
+    var pct = r.max > 0 ? clamp((r.current / r.max) * 100, 0, 100) : 100;
+    var maxLabel = r.max > 0 ? r.max : '∞';
     return '<div class="res-item">' +
       '<div class="name">' + escapeHtml(r.name) + '</div>' +
-      '<div class="val">' + r.current + ' / ' + r.max + '</div>' +
+      '<div class="val">' + r.current + ' / ' + maxLabel + '</div>' +
       '<div class="bar"><div style="width:' + pct + '%"></div></div>' +
       '</div>';
   }).join('') : '<div class="empty">Ресурсы не настроены</div>';
@@ -126,11 +127,14 @@ function roomCard(room) {
   var pct = max > 0 ? (room.level / max) * 100 : 0;
   var cur = room.levels[room.level - 1];
   var next = room.level < max ? room.levels[room.level] : null;
+  var genStr = formatGenSummary(cur);
+
   var html = '<div class="room-item">' +
     '<div class="name">' + escapeHtml(room.name) + '</div>' +
     '<div class="val">Уровень ' + room.level + ' / ' + max + '</div>' +
     '<div class="bar"><div style="width:' + pct + '%"></div></div>';
   if (cur && cur.desc) html += '<div class="muted" style="margin-top:8px;font-size:0.88em">' + escapeHtml(cur.desc) + '</div>';
+  if (genStr) html += '<div style="margin-top:8px;font-size:0.88em;color:#a8c8e0">⚡ Генерирует: ' + escapeHtml(genStr) + ' / ' + (state.generation.intervalMin || 5) + ' мин</div>';
   if (next) {
     html += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">' +
       '<div class="muted" style="font-size:0.85em">Следующий уровень:</div>' +
@@ -203,11 +207,14 @@ function renderMovementBanner() {
 
   if (m.status === 'proposing') {
     var needed = m.needed || 1;
-    var yes = m.yesVotes.length;
+    // Firebase мог потерять пустые массивы — защита
+    var yesVotes = Array.isArray(m.yesVotes) ? m.yesVotes : [];
+    var noVotes = Array.isArray(m.noVotes) ? m.noVotes : [];
+    var yes = yesVotes.length;
     var pct = Math.min(100, yes / needed * 100);
-    var yesNames = m.yesVotes.map(findUsername).join(', ');
-    var noNames = m.noVotes.map(findUsername).join(', ');
-    var alreadyVoted = session && (m.yesVotes.indexOf(session.userId) !== -1 || m.noVotes.indexOf(session.userId) !== -1);
+    var yesNames = yesVotes.map(findUsername).join(', ');
+    var noNames = noVotes.map(findUsername).join(', ');
+    var alreadyVoted = session && (yesVotes.indexOf(session.userId) !== -1 || noVotes.indexOf(session.userId) !== -1);
     var voteButtons = '';
     if (!session) voteButtons = '<span class="muted" style="align-self:center">Войдите, чтобы голосовать</span>';
     else if (alreadyVoted) voteButtons = '<span class="muted" style="align-self:center">Ты уже голосовал</span>';
@@ -499,9 +506,9 @@ function renderAdminResources() {
     return '<tr>' +
       '<td><input type="text" value="' + escapeHtml(r.name) + '" onchange="updRes(\'' + r.id + '\',\'name\',this.value)"></td>' +
       '<td><input type="number" value="' + r.current + '" onchange="updRes(\'' + r.id + '\',\'current\',this.value)" style="max-width:100px"></td>' +
-      '<td><input type="number" value="' + r.max + '" onchange="updRes(\'' + r.id + '\',\'max\',this.value)" style="max-width:100px"></td>' +
+      '<td><input type="number" min="0" value="' + r.max + '" onchange="updRes(\'' + r.id + '\',\'max\',this.value)" style="max-width:100px" title="0 = без ограничения"></td>' +
       '<td style="text-align:center;white-space:nowrap">' +
-        '<label class="toggle-switch" style="padding:4px 10px;gap:8px" title="Если включено, ресурс указывается в цене, но не списывается при строительстве">' +
+        '<label class="toggle-switch" style="padding:4px 10px;gap:8px">' +
           '<input type="checkbox"' + (isFree ? ' checked' : '') +
             ' onchange="updRes(\'' + r.id + '\',\'noDeduct\',this.checked)">' +
           '<span class="toggle-slider"></span>' +
@@ -512,11 +519,14 @@ function renderAdminResources() {
       '</tr>';
   }).join('');
   return '<div class="card"><h2>📦 Ресурсы</h2>' +
-    '<p class="muted" style="margin-top:0">Если у ресурса включён режим «не списывать» — он всё равно указывается в цене улучшения, но при одобрении заявки не отнимается.</p>' +
+    '<p class="muted" style="margin-top:0">' +
+      '<strong>Списание</strong>: «не списывать» — ресурс указывается в цене, но не отнимается при строительстве. ' +
+      '<strong>Максимум</strong>: <code>0</code> — без ограничения (генерация копится бесконечно).' +
+    '</p>' +
     '<table><thead><tr><th>Название</th><th>Текущее</th><th>Максимум</th><th style="text-align:center">Списание</th><th></th></tr></thead>' +
     '<tbody>' + (rows || '<tr><td colspan="5" class="empty">Пусто</td></tr>') + '</tbody></table>' +
     '<div style="margin-top:14px"><button class="btn" onclick="addRes()">+ Добавить ресурс</button></div>' +
-    '<p class="muted" style="margin-top:12px">Удаление ресурса уберёт его из стоимости уровней всех комнат.</p>' +
+    '<p class="muted" style="margin-top:12px">Удаление ресурса уберёт его из стоимости и генерации всех комнат.</p>' +
     '</div>';
 }
 
@@ -551,6 +561,7 @@ function roomAdminCard(room) {
 
 function levelEditor(room, lvl, i) {
   var isStart = i === 0;
+
   var costItems = state.resources.map(function(r) {
     var amt = (lvl.cost && lvl.cost[r.id]) || 0;
     var free = r.noDeduct;
@@ -561,13 +572,29 @@ function levelEditor(room, lvl, i) {
         ' onchange="setLevelCost(\'' + room.id + '\',' + i + ',\'' + r.id + '\',this.value)">' +
       '</div>';
   }).join('');
+
+  var genItems = state.resources.map(function(r) {
+    var amt = (lvl.generation && lvl.generation[r.id]) || 0;
+    return '<div class="cost-item" style="border-color:#3a5a6a">' +
+      '<span class="muted" style="color:#a8c8e0">⚡ ' + escapeHtml(r.name) + '</span>' +
+      '<input type="number" min="0" value="' + amt + '"' +
+        ' onchange="setLevelGeneration(\'' + room.id + '\',' + i + ',\'' + r.id + '\',this.value)">' +
+      '</div>';
+  }).join('');
+
   var delBtn = !isStart
     ? '<div class="fixed"><button class="btn btn-danger btn-sm" onclick="delLevel(\'' + room.id + '\',' + i + ')">✕ удалить уровень</button></div>'
     : '';
+
   var costBlock = !isStart
     ? '<div class="muted" style="font-size:0.85em;margin-top:6px">Стоимость перехода на этот уровень:</div>' +
       '<div class="cost-grid">' + (costItems || '<span class="muted">нет ресурсов</span>') + '</div>'
     : '';
+
+  var genBlock = '<div class="muted" style="font-size:0.85em;margin-top:8px">' +
+      '⚡ Генерация за интервал (пока комната на этом уровне):</div>' +
+      '<div class="cost-grid">' + (genItems || '<span class="muted">нет ресурсов</span>') + '</div>';
+
   return '<div class="level-block">' +
     '<div class="row" style="align-items:center">' +
       '<div class="fixed"><strong>Уровень ' + (i + 1) + '</strong>' + (isStart ? ' <span class="muted">(стартовый)</span>' : '') + '</div>' +
@@ -575,20 +602,21 @@ function levelEditor(room, lvl, i) {
     '</div>' +
     '<textarea rows="2" style="margin-top:6px" placeholder="Описание уровня" onchange="setLevelDesc(\'' + room.id + '\',' + i + ',this.value)">' + escapeHtml(lvl.desc || '') + '</textarea>' +
     costBlock +
+    genBlock +
     '</div>';
 }
 
 function renderAdminPlayers() {
   if (!state.users.length) return '<div class="card"><h2>👥 Игроки</h2><div class="empty">Пока никто не зарегистрировался</div></div>';
   var m = state.map.movement;
+  var yesVotes = (m && m.status === 'proposing' && Array.isArray(m.yesVotes)) ? m.yesVotes : [];
+  var noVotes = (m && m.status === 'proposing' && Array.isArray(m.noVotes)) ? m.noVotes : [];
   var rows = state.users.map(function(u) {
     var badges = '';
     if (session && session.userId === u.id) badges += ' <span class="muted">(вы)</span>';
     if (u.kickedAt) badges += ' <span class="badge badge-rejected">кикнут</span>';
-    if (m && m.status === 'proposing') {
-      if (m.yesVotes.indexOf(u.id) !== -1) badges += ' <span class="badge badge-approved">за</span>';
-      else if (m.noVotes.indexOf(u.id) !== -1) badges += ' <span class="badge badge-rejected">против</span>';
-    }
+    if (yesVotes.indexOf(u.id) !== -1) badges += ' <span class="badge badge-approved">за</span>';
+    else if (noVotes.indexOf(u.id) !== -1) badges += ' <span class="badge badge-rejected">против</span>';
     var propCount = state.requests.filter(function(r) { return r.userId === u.id; }).length;
     return '<tr>' +
       '<td>' + escapeHtml(u.username) + badges + '</td>' +
@@ -610,6 +638,15 @@ function renderAdminPlayers() {
 }
 
 function renderAdminSettings() {
+  var g = state.generation || { enabled: false, intervalMin: 5, lastTick: 0 };
+  var lastTickStr = g.lastTick > 0 ? new Date(g.lastTick).toLocaleString('ru-RU') : 'никогда';
+  var nextTickIn = '';
+  if (g.enabled && g.lastTick > 0) {
+    var msLeft = g.lastTick + g.intervalMin * 60 * 1000 - Date.now();
+    if (msLeft > 0) nextTickIn = ' (следующий через ' + Math.ceil(msLeft / 60000) + ' мин)';
+    else nextTickIn = ' (скоро)';
+  }
+
   return '<div class="card">' +
       '<h2>⚙️ Настройки базы</h2>' +
       '<div class="field"><label>Название базы</label>' +
@@ -617,6 +654,31 @@ function renderAdminSettings() {
       '<div class="field"><label>Пароль администратора</label>' +
         '<input type="text" value="' + escapeHtml(state.adminPassword) + '" onchange="setAdminPassword(this.value)"></div>' +
     '</div>' +
+
+    '<div class="card">' +
+      '<h2>⚡ Генерация ресурсов</h2>' +
+      '<p class="muted" style="margin-top:0">Настройка по каждой комнате задаётся в разделе «🏗️ Комнаты» — у каждого уровня есть блок «Генерация за интервал». ' +
+        'Здесь задаются общие параметры: включена ли генерация, как часто срабатывает тик.</p>' +
+      '<div style="margin-bottom:12px">' +
+        '<label class="toggle-switch">' +
+          '<input type="checkbox"' + (g.enabled ? ' checked' : '') +
+            ' onchange="setGenerationSetting(\'enabled\', this.checked)">' +
+          '<span class="toggle-slider"></span>' +
+          '<span class="toggle-text">' + (g.enabled ? '⚡ Генерация включена' : '⏸ Генерация выключена') + '</span>' +
+        '</label>' +
+      '</div>' +
+      '<div class="field"><label>Интервал генерации (минут)</label>' +
+        '<input type="number" min="1" step="1" value="' + g.intervalMin + '" ' +
+        'onchange="setGenerationSetting(\'intervalMin\', this.value)"></div>' +
+      '<div class="muted" style="font-size:0.9em">Последний тик: <strong>' + lastTickStr + '</strong>' + nextTickIn + '</div>' +
+      '<p class="muted" style="font-size:0.85em;margin-top:8px">Тик срабатывает, пока у кого-то из игроков (включая админа) открыт сайт. ' +
+        'Если никто не открыл сайт за интервал — генерация не сработает. Можно ускорить вручную:</p>' +
+      '<div class="row" style="margin-top:8px">' +
+        '<button class="btn" onclick="forceTickGeneration()">⚡ Тикнуть сейчас</button>' +
+        '<button class="btn btn-ghost" onclick="resetGenerationTimer()">🕐 Сбросить таймер</button>' +
+      '</div>' +
+    '</div>' +
+
     '<div class="card">' +
       '<h2>💾 Данные</h2>' +
       '<div class="row">' +
@@ -627,4 +689,10 @@ function renderAdminSettings() {
       '<input type="file" id="import-file" accept="application/json" style="display:none" onchange="importData(event)">' +
       '<p class="muted" style="margin-top:12px">Экспорт/импорт работает в любом режиме БД.</p>' +
     '</div>';
+}
+
+function resetGenerationTimer() {
+  if (!isAdmin()) return;
+  mutate(function(s) { s.generation.lastTick = Date.now(); });
+  toast('🕐 Таймер генерации сброшен');
 }

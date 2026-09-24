@@ -127,12 +127,17 @@ function proposeMovement(markerId) {
 function voteMovement(agree) {
   if (!session) return toast('Войдите, чтобы голосовать');
   if (!state.map.movement || state.map.movement.status !== 'proposing') return;
+  // Firebase мог потерять пустые массивы — восстанавливаем перед использованием
+  if (!Array.isArray(state.map.movement.yesVotes)) state.map.movement.yesVotes = [];
+  if (!Array.isArray(state.map.movement.noVotes)) state.map.movement.noVotes = [];
   var userId = session.userId;
   var m = state.map.movement;
   if (m.yesVotes.indexOf(userId) !== -1 || m.noVotes.indexOf(userId) !== -1) {
     return toast('Ты уже голосовал');
   }
   mutate(function(s) {
+    if (!Array.isArray(s.map.movement.yesVotes)) s.map.movement.yesVotes = [];
+    if (!Array.isArray(s.map.movement.noVotes)) s.map.movement.noVotes = [];
     if (agree) s.map.movement.yesVotes.push(userId);
     else s.map.movement.noVotes.push(userId);
     if (s.map.movement.yesVotes.length >= s.map.movement.needed) {
@@ -515,6 +520,7 @@ function delRes(id) {
         for (var j = 0; j < s.rooms[i].levels.length; j++) {
           var lvl = s.rooms[i].levels[j];
           if (lvl.cost && lvl.cost[id]) delete lvl.cost[id];
+          if (lvl.generation && lvl.generation[id]) delete lvl.generation[id];
         }
       }
     });
@@ -523,6 +529,106 @@ function delRes(id) {
 
 function addRes() {
   mutate(function(s) { s.resources.push({ id: uid(), name: 'Новый ресурс', current: 0, max: 100, noDeduct: false }); });
+}
+
+// ===== ГЕНЕРАЦИЯ =====
+function computeGenerationGains() {
+  var gains = {};
+  for (var i = 0; i < state.rooms.length; i++) {
+    var room = state.rooms[i];
+    var lvl = room.levels[room.level - 1];
+    if (!lvl || !lvl.generation) continue;
+    for (var rid in lvl.generation) {
+      var amt = lvl.generation[rid];
+      if (amt > 0) gains[rid] = (gains[rid] || 0) + amt;
+    }
+  }
+  return gains;
+}
+
+function tickGeneration(force) {
+  if (!state || !state.generation) return;
+  if (!force && !state.generation.enabled) return;
+
+  var now = Date.now();
+  var intervalMs = (state.generation.intervalMin || 5) * 60 * 1000;
+  if (!force && now - state.generation.lastTick < intervalMs) return;
+
+  var gains = computeGenerationGains();
+  var hasGains = false;
+  for (var k in gains) { hasGains = true; break; }
+
+  mutate(function(s) {
+    s.generation.lastTick = now;
+    if (!hasGains) return;
+    for (var rid in gains) {
+      var res = null;
+      for (var i = 0; i < s.resources.length; i++) if (s.resources[i].id === rid) res = s.resources[i];
+      if (!res) continue;
+      var newVal = res.current + gains[rid];
+      if (res.max > 0 && newVal > res.max) newVal = res.max;
+      res.current = newVal;
+    }
+  });
+
+  if (hasGains) {
+    var parts = [];
+    for (var rid2 in gains) {
+      var r2 = null;
+      for (var j = 0; j < state.resources.length; j++) if (state.resources[j].id === rid2) r2 = state.resources[j];
+      if (r2) parts.push(r2.name + ' +' + gains[rid2]);
+    }
+    if (parts.length) toast('⚡ Генерация: ' + parts.join(', '));
+  }
+}
+
+function forceTickGeneration() {
+  if (!isAdmin()) return;
+  if (!state || !state.generation) return;
+  tickGeneration(true);
+  toast('⚡ Тик генерации выполнен');
+}
+
+function setLevelGeneration(roomId, i, resId, v) {
+  var r = null;
+  for (var k = 0; k < state.rooms.length; k++) if (state.rooms[k].id === roomId) r = state.rooms[k];
+  if (!r) return;
+  var n = Number(v) || 0;
+  mutate(function() {
+    var lvl = r.levels[i];
+    lvl.generation = lvl.generation || {};
+    if (n <= 0) delete lvl.generation[resId];
+    else lvl.generation[resId] = n;
+  });
+  toast('Генерация обновлена');
+}
+
+function setGenerationSetting(field, value) {
+  if (!isAdmin()) return;
+  if (field === 'enabled') {
+    mutate(function(s) { s.generation.enabled = !!value; });
+    toast(value ? '⚡ Генерация включена' : '⏸ Генерация выключена');
+    return;
+  }
+  if (field === 'intervalMin') {
+    value = Number(value) || 5;
+    if (value < 1) value = 1;
+    mutate(function(s) { s.generation.intervalMin = value; });
+    toast('Интервал: ' + value + ' мин');
+  }
+}
+
+function formatGenSummary(level) {
+  if (!level || !level.generation) return '';
+  var parts = [];
+  for (var rid in level.generation) {
+    var amt = level.generation[rid];
+    if (amt <= 0) continue;
+    var r = null;
+    for (var i = 0; i < state.resources.length; i++) if (state.resources[i].id === rid) r = state.resources[i];
+    if (r) parts.push(r.name + ' +' + amt);
+  }
+  return parts.join(', ');
 }
 
 // ===== КОМНАТЫ =====
@@ -569,7 +675,7 @@ function addLevel(roomId) {
   var r = null;
   for (var k = 0; k < state.rooms.length; k++) if (state.rooms[k].id === roomId) r = state.rooms[k];
   if (!r) return;
-  mutate(function() { r.levels.push({ desc: 'Новый уровень', cost: {} }); });
+  mutate(function() { r.levels.push({ desc: 'Новый уровень', cost: {}, generation: {} }); });
 }
 
 function delLevel(roomId, i) {
@@ -596,8 +702,8 @@ function addRoom() {
     s.rooms.push({
       id: uid(), name: 'Новая комната', level: 1,
       levels: [
-        { desc: 'Стартовое состояние', cost: {} },
-        { desc: 'Улучшенный уровень', cost: {} }
+        { desc: 'Стартовое состояние', cost: {}, generation: {} },
+        { desc: 'Улучшенный уровень', cost: {}, generation: {} }
       ]
     });
   });
@@ -617,8 +723,10 @@ function kickPlayer(id, deleteAccount) {
       if (deleteAccount) {
         s.users = s.users.filter(function(x) { return x.id !== id; });
         if (s.map.movement) {
-          s.map.movement.yesVotes = s.map.movement.yesVotes.filter(function(v) { return v !== id; });
-          s.map.movement.noVotes = s.map.movement.noVotes.filter(function(v) { return v !== id; });
+          if (Array.isArray(s.map.movement.yesVotes))
+            s.map.movement.yesVotes = s.map.movement.yesVotes.filter(function(v) { return v !== id; });
+          if (Array.isArray(s.map.movement.noVotes))
+            s.map.movement.noVotes = s.map.movement.noVotes.filter(function(v) { return v !== id; });
         }
       } else {
         for (var k = 0; k < s.users.length; k++) {
