@@ -49,7 +49,8 @@ function initYoutubePlayer() {
       'disablekb': 1,
       'fs': 0,
       'modestbranding': 1,
-      'playsinline': 1
+      'playsinline': 1,
+      'origin': window.location.origin
     },
     events: {
       'onReady': function(event) {
@@ -72,16 +73,20 @@ function syncYoutubePlayer() {
   
   var p = state.player;
   
+  // Если музыка не задана или остановлена
   if (p.status === 'stopped' || (!p.videoId && !p.playlistId)) {
     if (typeof ytPlayer.stopVideo === 'function' && ytPlayer.getPlayerState() !== YT.PlayerState.UNSTARTED) {
        ytPlayer.stopVideo();
        currentTrackLoaded = '';
     }
+    var oldPrompt = document.getElementById('unmute-prompt');
+    if (oldPrompt) oldPrompt.remove();
     return;
   }
 
   var trackId = p.videoId || p.playlistId;
 
+  // Загрузка трека
   if (currentTrackLoaded !== trackId) {
     currentTrackLoaded = trackId;
     if (p.playlistId) {
@@ -99,6 +104,7 @@ function syncYoutubePlayer() {
     }
   }
 
+  // Синхронизация
   if (p.status === 'playing') {
     var expectedTime = (Date.now() - p.startedAt) / 1000;
     if (expectedTime < 0) expectedTime = 0;
@@ -111,6 +117,31 @@ function syncYoutubePlayer() {
     
     if (ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) {
       ytPlayer.playVideo();
+      
+      // Проверка на автоплей (браузер может блокировать)
+      setTimeout(function() {
+        if (ytPlayer && ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) {
+          if (!document.getElementById('unmute-prompt')) {
+            var prompt = document.createElement('div');
+            prompt.id = 'unmute-prompt';
+            prompt.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--accent);color:#1a1410;padding:15px 25px;border-radius:30px;font-weight:bold;cursor:pointer;box-shadow:0 4px 20px rgba(0,0,0,0.6);font-family:Georgia, serif;animation:pulse 2s infinite;';
+            prompt.innerHTML = '🔊 Нажмите, чтобы включить музыку';
+            prompt.onclick = function() {
+              ytPlayer.unMute();
+              ytPlayer.setVolume(ui.playerVolume);
+              ytPlayer.playVideo();
+              prompt.remove();
+            };
+            document.body.appendChild(prompt);
+          }
+        } else {
+          var p = document.getElementById('unmute-prompt');
+          if (p) p.remove();
+        }
+      }, 1000);
+    } else {
+      var p = document.getElementById('unmute-prompt');
+      if (p) p.remove();
     }
   } else if (p.status === 'paused') {
     if (ytPlayer.getPlayerState() === YT.PlayerState.PLAYING) {
@@ -120,10 +151,14 @@ function syncYoutubePlayer() {
     if (Math.abs(currentTime - p.currentTimeAtPause) > 2.5) {
       ytPlayer.seekTo(p.currentTimeAtPause, true);
     }
+    var p = document.getElementById('unmute-prompt');
+    if (p) p.remove();
   }
 }
 
+// Раз в 5 секунд принудительно проверяем синхронизацию
 setInterval(syncYoutubePlayer, 5000);
+
 
 // Старт
 session = loadSession();

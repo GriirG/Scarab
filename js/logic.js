@@ -127,7 +127,6 @@ function proposeMovement(markerId) {
 function voteMovement(agree) {
   if (!session) return toast('Войдите, чтобы голосовать');
   if (!state.map.movement || state.map.movement.status !== 'proposing') return;
-  // Firebase мог потерять пустые массивы — восстанавливаем перед использованием
   if (!Array.isArray(state.map.movement.yesVotes)) state.map.movement.yesVotes = [];
   if (!Array.isArray(state.map.movement.noVotes)) state.map.movement.noVotes = [];
   var userId = session.userId;
@@ -810,23 +809,38 @@ function getYoutubeData(url) {
   var videoId = '';
   var playlistId = '';
   
+  if (!url) return { videoId: '', playlistId: '' };
+  url = String(url).trim();
+
+  // Если просто ID видео (11 символов)
+  if (url.length === 11 && !url.includes('/') && !url.includes('?')) {
+    return { videoId: url, playlistId: '' };
+  }
+  
+  // Извлекаем ID видео
   var vMatch = url.match(/[?&]v=([^&#]*)/);
-  if (vMatch) videoId = vMatch[1];
-  else if (url.length === 11) videoId = url;
-  else {
+  if (vMatch) {
+    videoId = vMatch[1];
+  } else {
     var shortMatch = url.match(/youtu\.be\/([^?&#]*)/);
     if (shortMatch) videoId = shortMatch[1];
   }
 
+  // Извлекаем ID плейлиста
   var listMatch = url.match(/[?&]list=([^&#]*)/);
-  if (listMatch) playlistId = listMatch[1];
+  if (listMatch) {
+    playlistId = listMatch[1];
+  } else if (url.includes('playlist?list=')) {
+    var pMatch = url.match(/[?&]list=([^&#]*)/);
+    if (pMatch) playlistId = pMatch[1];
+  }
 
   return { videoId: videoId, playlistId: playlistId };
 }
 
 function adminSetMusic(url) {
   if (!isAdmin()) return;
-  if (!url) {
+  if (!url || url.trim() === '') {
     mutate(function(s) {
       s.player.status = 'stopped';
       s.player.videoId = '';
@@ -837,6 +851,8 @@ function adminSetMusic(url) {
   
   var parsed = getYoutubeData(url);
   if (!parsed.videoId && !parsed.playlistId) return toast('Неверная ссылка YouTube');
+  
+  toast('Загружаю: ' + (parsed.videoId || parsed.playlistId));
 
   mutate(function(s) {
     s.player.videoId = parsed.videoId;

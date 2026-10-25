@@ -6,7 +6,7 @@ function getTabs() {
     tabs.push(['admin-resources', '📦 Ресурсы']);
     tabs.push(['admin-rooms', '🏗️ Комнаты']);
     tabs.push(['admin-players', '👥 Игроки']);
-    tabs.push(['admin-music', '🎵 Музыка']); // <- Новая вкладка
+    tabs.push(['admin-music', '🎵 Музыка']); // <- Вкладка музыки
     tabs.push(['admin-settings', '⚙️ Настройки']);
   } else {
     tabs.push(['newreq', '⚒️ Запросить улучшение']);
@@ -46,7 +46,6 @@ function render() {
     if (sel) updateReqPreview(sel.value);
   }
   
-  // Вызываем синхронизацию плеера при каждом рендере
   if (typeof syncYoutubePlayer === 'function') {
     syncYoutubePlayer();
   }
