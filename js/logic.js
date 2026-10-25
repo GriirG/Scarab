@@ -175,10 +175,23 @@ function cancelMovement() {
   var m = state.map.movement;
   var allowed = isAdmin() || (session && m.status === 'proposing' && session.userId === m.proposedBy);
   if (!allowed) return toast('Недостаточно прав');
-  showConfirm('Отменить ' + (m.status === 'moving' ? 'перемещение' : 'предложение') + '?', function() {
-    mutate(function(s) { s.map.movement = null; });
-    toast('Отменено');
-  });
+
+  if (!ui.pendingCancelMovement) {
+    ui.pendingCancelMovement = true;
+    render();
+    toast('⚠️ Нажми «Отменить» ещё раз, чтобы подтвердить (4 сек)');
+    setTimeout(function() {
+      if (ui.pendingCancelMovement) {
+        ui.pendingCancelMovement = false;
+        render();
+      }
+    }, 4000);
+    return;
+  }
+
+  ui.pendingCancelMovement = false;
+  mutate(function(s) { s.map.movement = null; });
+  toast('✕ Отменено');
 }
 
 function completeMovement() {
@@ -790,4 +803,63 @@ function importData(ev) {
     } catch (e) { toast('Ошибка импорта'); }
   };
   reader.readAsText(f);
+}
+
+// ===== ПЛЕЕР =====
+function getYoutubeData(url) {
+  var videoId = '';
+  var playlistId = '';
+  
+  var vMatch = url.match(/[?&]v=([^&#]*)/);
+  if (vMatch) videoId = vMatch[1];
+  else if (url.length === 11) videoId = url;
+  else {
+    var shortMatch = url.match(/youtu\.be\/([^?&#]*)/);
+    if (shortMatch) videoId = shortMatch[1];
+  }
+
+  var listMatch = url.match(/[?&]list=([^&#]*)/);
+  if (listMatch) playlistId = listMatch[1];
+
+  return { videoId: videoId, playlistId: playlistId };
+}
+
+function adminSetMusic(url) {
+  if (!isAdmin()) return;
+  if (!url) {
+    mutate(function(s) {
+      s.player.status = 'stopped';
+      s.player.videoId = '';
+      s.player.playlistId = '';
+    });
+    return;
+  }
+  
+  var parsed = getYoutubeData(url);
+  if (!parsed.videoId && !parsed.playlistId) return toast('Неверная ссылка YouTube');
+
+  mutate(function(s) {
+    s.player.videoId = parsed.videoId;
+    s.player.playlistId = parsed.playlistId;
+    s.player.status = 'playing';
+    s.player.startedAt = Date.now();
+    s.player.currentTimeAtPause = 0;
+  });
+}
+
+function adminToggleMusic() {
+  if (!isAdmin()) return;
+  if (!state.player || state.player.status === 'stopped') return;
+
+  mutate(function(s) {
+    if (s.player.status === 'playing') {
+      s.player.status = 'paused';
+      if (ytPlayer && typeof ytPlayer.getCurrentTime === 'function') {
+        s.player.currentTimeAtPause = ytPlayer.getCurrentTime();
+      }
+    } else {
+      s.player.status = 'playing';
+      s.player.startedAt = Date.now() - (s.player.currentTimeAtPause * 1000);
+    }
+  });
 }

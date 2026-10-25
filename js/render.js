@@ -6,6 +6,7 @@ function getTabs() {
     tabs.push(['admin-resources', '📦 Ресурсы']);
     tabs.push(['admin-rooms', '🏗️ Комнаты']);
     tabs.push(['admin-players', '👥 Игроки']);
+    tabs.push(['admin-music', '🎵 Музыка']); // <- Новая вкладка
     tabs.push(['admin-settings', '⚙️ Настройки']);
   } else {
     tabs.push(['newreq', '⚒️ Запросить улучшение']);
@@ -17,6 +18,7 @@ function getTabs() {
 function render() {
   if (!state) return;
   checkSessionValidity();
+  if (!state.map.movement) ui.pendingCancelMovement = false;
 
   if (state.map && state.map.movement && state.map.movement.status === 'moving') {
     if (Date.now() - state.map.movement.startedAt >= state.map.movement.durationMs) {
@@ -36,11 +38,17 @@ function render() {
   document.getElementById('app').innerHTML =
     renderBanner() + renderHeader() + renderNav(tabs) + movementHtml +
     '<main class="container">' + renderContent(ui.currentTab) + '</main>' +
+    renderPlayerControls() +
     renderConfirmModal();
 
   if (ui.currentTab === 'newreq') {
     var sel = document.getElementById('req-room');
     if (sel) updateReqPreview(sel.value);
+  }
+  
+  // Вызываем синхронизацию плеера при каждом рендере
+  if (typeof syncYoutubePlayer === 'function') {
+    syncYoutubePlayer();
   }
 }
 
@@ -85,6 +93,7 @@ function renderContent(tab) {
     case 'admin-resources': return renderAdminResources();
     case 'admin-rooms': return renderAdminRooms();
     case 'admin-players': return renderAdminPlayers();
+    case 'admin-music': return renderAdminMusic();
     case 'admin-settings': return renderAdminSettings();
     default: return '';
   }
@@ -207,7 +216,6 @@ function renderMovementBanner() {
 
   if (m.status === 'proposing') {
     var needed = m.needed || 1;
-    // Firebase мог потерять пустые массивы — защита
     var yesVotes = Array.isArray(m.yesVotes) ? m.yesVotes : [];
     var noVotes = Array.isArray(m.noVotes) ? m.noVotes : [];
     var yes = yesVotes.length;
@@ -221,8 +229,14 @@ function renderMovementBanner() {
     else voteButtons = '<button class="btn btn-success btn-sm" onclick="voteMovement(true)">✅ Согласен</button>' +
                        '<button class="btn btn-danger btn-sm" onclick="voteMovement(false)">❌ Против</button>';
     var adminBtn = isAdmin() ? '<button class="btn btn-sm" onclick="adminForceStartMovement()">▶️ Начать сейчас</button>' : '';
+    
+    var pendingCancel = ui.pendingCancelMovement;
     var cancelBtn = (isAdmin() || (session && session.userId === m.proposedBy))
-      ? '<button class="btn btn-ghost btn-sm" onclick="cancelMovement()">✕ Отменить</button>' : '';
+      ? '<button class="btn btn-sm ' + (pendingCancel ? 'btn-confirm-delete' : 'btn-ghost') +
+        '" onclick="cancelMovement()">' +
+        (pendingCancel ? '⚠️ Точно отменить' : '✕ Отменить') +
+        '</button>'
+      : '';
 
     return '<div class="card movement-banner">' +
       '<h3>📜 Предложение о перемещении</h3>' +
@@ -253,7 +267,10 @@ function renderMovementBanner() {
         formatTime(remainingRP) + '</span></div>' +
       (isAdmin() ? '<div class="row" style="margin-top:12px">' +
         '<button class="btn btn-success btn-sm" onclick="adminSkipMovement()">⏭️ Пропустить</button>' +
-        '<button class="btn btn-danger btn-sm" onclick="cancelMovement()">✕ Прервать</button>' +
+        '<button class="btn btn-sm ' + (ui.pendingCancelMovement ? 'btn-confirm-delete' : 'btn-danger') +
+          '" onclick="cancelMovement()">' +
+          (ui.pendingCancelMovement ? '⚠️ Точно прервать' : '✕ Прервать') +
+        '</button>' +
       '</div>' : '') +
       '</div>';
   }
@@ -635,6 +652,58 @@ function renderAdminPlayers() {
     '<table><thead><tr><th>Имя</th><th>Заявок</th><th></th></tr></thead>' +
     '<tbody>' + rows + '</tbody></table>' +
     '</div>';
+}
+
+function renderAdminMusic() {
+  var p = state.player || { status: 'stopped' };
+  var statusText = 'Остановлено';
+  if (p.status === 'playing') statusText = '▶️ Играет';
+  if (p.status === 'paused') statusText = '⏸ На паузе';
+  
+  var currentUrl = p.videoId ? 'https://youtu.be/' + p.videoId : (p.playlistId ? 'https://youtube.com/playlist?list=' + p.playlistId : '');
+
+  return '<div class="card">' +
+      '<h2>🎵 Музыкальный плеер (Админ)</h2>' +
+      '<p class="muted" style="margin-top:0">Вставь ссылку на видео или плейлист YouTube. Музыка включится у всех игроков. ' +
+      'Громкость каждый настраивает себе сам.</p>' +
+      
+      '<div class="field"><label>Ссылка на YouTube</label>' +
+        '<div class="row">' +
+          '<input type="text" id="music-url" placeholder="https://www.youtube.com/watch?v=..." value="' + escapeHtml(currentUrl) + '">' +
+          '<button class="btn fixed" onclick="adminSetMusic(document.getElementById(\'music-url\').value)">Включить</button>' +
+        '</div>' +
+      '</div>' +
+
+      '<div style="margin-top:20px; padding-top:20px; border-top:1px solid var(--border)">' +
+        '<div class="muted" style="margin-bottom:10px">Статус: <strong>' + statusText + '</strong></div>' +
+        '<div class="row">' +
+          '<button class="btn btn-success fixed" onclick="adminToggleMusic()">' + 
+            (p.status === 'playing' ? '⏸ Пауза' : '▶️ Играть') + 
+          '</button>' +
+          '<button class="btn btn-danger fixed" onclick="adminSetMusic(\'\')">⏹ Стоп</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+}
+
+function renderPlayerControls() {
+  if (!state.player || state.player.status === 'stopped') return '';
+  
+  return '<div style="position: fixed; bottom: 20px; left: 20px; z-index: 2000; ' +
+    'background: var(--panel-2); border: 2px solid var(--accent-2); border-radius: 30px; ' +
+    'padding: 10px 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.6); display: flex; align-items: center; gap: 10px;">' +
+    '<span style="font-size: 1.2em; cursor: default" title="Громкость">🔊</span>' +
+    '<input type="range" min="0" max="100" value="' + ui.playerVolume + '" ' +
+      'oninput="changeVolume(this.value)" style="width: 100px; cursor: pointer;">' +
+    '</div>';
+}
+
+function changeVolume(val) {
+  ui.playerVolume = parseInt(val, 10);
+  localStorage.setItem('scarab_volume', val);
+  if (ytPlayer && typeof ytPlayer.setVolume === 'function') {
+    ytPlayer.setVolume(ui.playerVolume);
+  }
 }
 
 function renderAdminSettings() {

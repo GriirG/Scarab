@@ -62,6 +62,13 @@ var DEFAULT_STATE = {
     intervalMin: 5,
     lastTick: 0
   },
+  player: {
+    videoId: '',
+    playlistId: '',
+    status: 'stopped',
+    startedAt: 0,
+    currentTimeAtPause: 0
+  },
   users: [],
   requests: []
 };
@@ -74,6 +81,11 @@ function migrate(s) {
   if (!Array.isArray(s.requests)) s.requests = [];
   if (!s.baseName) s.baseName = 'Скараб';
   if (!s.adminPassword) s.adminPassword = 'admin';
+
+  // Миграция плеера
+  if (!s.player || typeof s.player !== 'object') {
+    s.player = { videoId: '', playlistId: '', status: 'stopped', startedAt: 0, currentTimeAtPause: 0 };
+  }
 
   for (var ri = 0; ri < s.resources.length; ri++) {
     if (typeof s.resources[ri].noDeduct !== 'boolean') s.resources[ri].noDeduct = false;

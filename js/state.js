@@ -1,42 +1,26 @@
 // ═══════════════════════════════════════════════════════════════════
 // ГЛОБАЛЬНОЕ СОСТОЯНИЕ
 // ═══════════════════════════════════════════════════════════════════
-
-// state — текущее состояние всей игры (ресурсы, комнаты, карта, игроки, заявки).
-// Заполняется после initDB() из Firebase или localStorage.
 var state = null;
-
-// session — текущий залогиненный пользователь на этом устройстве.
-// { userId, username, isAdmin, loggedInAt } или null.
-// Хранится в localStorage отдельно от state, чтобы не синхронизировался между устройствами.
 var session = null;
+var db = { mode: 'local', error: null, database: null };
 
-// db — состояние подключения к базе данных.
-//   mode:     'local'    — localStorage
-//             'firebase' — подключено к Firebase Realtime Database
-//             'error'    — попытка подключиться не удалась, работаем локально
-//   error:    текст ошибки, если mode === 'error'
-//   database: объект firebase.database() при успешном подключении
-var db = {
-  mode: 'local',
-  error: null,
-  database: null
-};
+// Переменные YouTube-плеера
+var ytPlayer = null;
+var ytApiReady = false;
+var currentTrackLoaded = ''; // Чтобы не перезагружать видео, если оно не менялось
 
-// ui — эфемерное состояние интерфейса (не сохраняется на сервере).
 var ui = {
-  currentTab: 'base',          // активная вкладка
-  currentBrush: null,          // 'marker' | 'location' | null
-  currentEmoji: '🔥',          // последний эмодзи для новой метки
-  selectedMarkerId: null,      // выбранная метка на карте
-  pendingDeleteMarker: null,   // id метки, ожидающей подтверждения удаления
-  mapSettingsOpen: false,      // раскрыты ли настройки карты
-  confirmState: null           // { message, onYes } для кастомного модала
+  currentTab: 'base',
+  currentBrush: null,
+  currentEmoji: '🔥',
+  selectedMarkerId: null,
+  pendingDeleteMarker: null,
+  pendingCancelMovement: false,
+  mapSettingsOpen: false,
+  confirmState: null,
+  playerVolume: parseInt(localStorage.getItem('scarab_volume') || '50', 10)
 };
-
-// ═══════════════════════════════════════════════════════════════════
-// СЕССИЯ (localStorage, отдельно от основного state)
-// ═══════════════════════════════════════════════════════════════════
 
 function loadSession() {
   try {
